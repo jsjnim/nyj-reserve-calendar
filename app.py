@@ -88,7 +88,7 @@ def parse_rlist(html):
         raw = parts[1] if len(parts) > 1 else parts[0]
         detail = raw.strip("() ")
         if "일반" in raw:  # 월문은 "배드민턴코트 B (일반)" 한 코트뿐
-            facility, court = "월문", "시민코트"
+            facility, court = "월문", "B코트(시민)"
         else:
             m = re.search(r"코트\s*([A-Za-z0-9])", detail)
             court = f"{m.group(1).upper()}코트" if m else detail
@@ -97,12 +97,13 @@ def parse_rlist(html):
             else:
                 facility = CENTER_MAP.get(center, center[:2])
         d = re.search(r"\d{4}-\d{2}-\d{2}", tr.select_one("td.rlist_usedate").get_text())
-        t = re.search(r"(\d{1,2}):\d{2}\s*~\s*(\d{1,2}):\d{2}", tr.select_one("td.rlist_usetime").get_text())
+        t = re.search(r"(\d{1,2}):(\d{2})\s*~\s*(\d{1,2}):(\d{2})", tr.select_one("td.rlist_usetime").get_text())
         if not (d and t):
             continue
         rows.append({
             "id": no.get_text(strip=True), "date": d.group(0), "facility": facility,
-            "court": court, "hour": int(t.group(1)), "end": int(t.group(2)), "status": status,
+            "court": court, "hour": int(t.group(1)), "end": int(t.group(3)), "status": status,
+            "time": f"{int(t.group(1)):02d}:{t.group(2)}~{int(t.group(3)):02d}:{t.group(4)}",
         })
     tot = soup.select_one(".total_area")
     m = re.search(r"페이지\s*:\s*(\d+)\s*/\s*(\d+)", tot.get_text(" ")) if tot else None
@@ -162,7 +163,7 @@ def make_sample(year, month):
     for d in range(1, last + 1):
         for _ in range(random.randint(0, 4)):
             facility = random.choice(["와부", "와부", "와부", "월문"])
-            court = random.choice(["A코트", "B코트", "C코트"]) if facility == "와부" else "시민코트"
+            court = random.choice(["A코트", "B코트", "C코트"]) if facility == "와부" else "B코트(시민)"
             rows.append({
                 "date": f"{year}-{month:02d}-{d:02d}",
                 "facility": facility,
@@ -183,17 +184,26 @@ st.markdown(
 h1.t{color:#1d4ed8;font-size:1.9rem;margin:0 0 .3rem}
 p.sub{color:#64748b;margin:0 0 1.2rem}
 h3.sec{border-left:5px solid #3b82f6;padding-left:.7rem;color:#64748b;margin:1rem 0 .5rem}
-table.cal{width:100%;border-collapse:separate;border-spacing:3px;table-layout:fixed;
-  background:#f8fafc;border:1px solid #dbe4f0;border-radius:10px;padding:4px}
-table.cal th{background:#eef2f8;border:1px solid #dbe4f0;border-radius:4px;padding:6px 0;font-size:.8rem}
+table.cal{width:100%;border-collapse:separate;border-spacing:2px;table-layout:fixed;
+  background:#f8fafc;border:1px solid #dbe4f0;border-radius:10px;padding:2px}
+table.cal th{background:#eef2f8;border:1px solid #dbe4f0;border-radius:4px;padding:5px 0;font-size:.78rem}
 table.cal td{vertical-align:top;background:#fff;border:1px solid #dbe4f0;border-radius:4px;
-  height:92px;padding:3px;overflow:hidden}
+  height:58px;padding:2px;overflow:hidden}
 table.cal td.empty{background:#f1f5f9}
 .sun{color:#ef4444}.sat{color:#2563eb}
-.dn{font-size:.72rem;font-weight:700}
-.pill{display:block;font-size:.56rem;line-height:1.15;margin-top:2px;padding:1px 2px;
-  border-left:3px solid #3b82f6;background:#f1f5f9;white-space:nowrap;overflow:hidden}
-.pill b{border-radius:3px;padding:0 2px;margin-left:1px}
+.dn{font-size:.72rem;font-weight:700;white-space:nowrap}
+.cn{font-size:.55rem;font-weight:500;color:#64748b;margin-left:2px}
+.chip{display:block;font-size:.58rem;line-height:1.25;margin-top:2px;padding:1px 2px;
+  border-radius:3px;white-space:nowrap;overflow:hidden;font-weight:700}
+.lg{display:inline-block;font-size:.72rem;padding:1px 6px;border-radius:4px;margin:2px 4px 2px 0}
+.card{border-radius:8px;padding:.5rem .7rem;margin:.35rem 0}
+.ch{display:flex;justify-content:space-between;align-items:center;font-size:1rem}
+.bd{color:#fff;border-radius:6px;padding:2px 8px;font-size:.78rem;font-weight:700}
+.cb{font-weight:600;margin-top:.15rem}
+@media (max-width:640px){
+  .block-container{padding-left:.4rem;padding-right:.4rem;padding-top:1.2rem}
+  h1.t{font-size:1.5rem}
+}
 </style>
 <h1 class="t">남양주시 시설 예약 현황 캘린더</h1>
 <p class="sub">남양주시 통합예약 시스템 실시간 마이페이지 연동 뷰어</p>
@@ -257,6 +267,56 @@ prefix = f"{year}-{month:02d}-"
 month_rows = [r for r in st.session_state.rows if r["date"].startswith(prefix)]
 visible = [r for r in month_rows if show_refund or r["status"] not in HIDDEN_BY_DEFAULT]
 
+FAC = {  # 시설별 색: 와부=연한 파랑, 월문=주황
+    "와부": {"bg": "#dbeafe", "bar": "#60a5fa", "fg": "#1e3a8a", "card": "#eff6ff"},
+    "월문": {"bg": "#ffedd5", "bar": "#f97316", "fg": "#9a3412", "card": "#fff7ed"},
+}
+FAC_DEFAULT = {"bg": "#e5e7eb", "bar": "#9ca3af", "fg": "#374151", "card": "#f3f4f6"}
+BORDER = {"예약완료": "solid", "신청대기": "dashed", "결제대기": "dashed", "환불대기": "dotted", "환불완료": "dotted"}
+WD = "월화수목금토일"
+
+
+def time_text(r):
+    return r.get("time") or f'{r["hour"]:02d}:00~{r.get("end", r["hour"] + 2):02d}:00'
+
+
+def court_letter(r):
+    m = re.match(r"([A-Za-z0-9])코트", r["court"])
+    return m.group(1) if m else r["court"][:1]
+
+
+def day_chips(items):
+    """같은 시설·시간·상태의 예약을 한 칸으로 묶는다. 예) '19 ABC' = 19시 A·B·C코트"""
+    groups = {}
+    for r in sorted(items, key=lambda r: (r["hour"], r["facility"], r["court"])):
+        groups.setdefault((r["hour"], r["facility"], r["status"]), []).append(r)
+    out = ""
+    for (hour, facility, status), rs in groups.items():
+        col = FAC.get(facility, FAC_DEFAULT)
+        label = "월" if facility == "월문" else "".join(court_letter(r) for r in rs)
+        style = (
+            f'background:{col["bg"]};color:{col["fg"]};border:1px {BORDER.get(status, "solid")} {col["bar"]};'
+            f'border-left:3px solid {col["bar"]};'
+            + ("text-decoration:line-through;" if status == "환불완료" else "")
+        )
+        out += f'<span class="chip" style="{style}">{hour} {label}</span>'
+    return out
+
+
+def day_cards(items):
+    out = ""
+    for r in sorted(items, key=lambda r: (r["hour"], r["court"])):
+        col = FAC.get(r["facility"], FAC_DEFAULT)
+        badge = col["bar"] if r["status"] == "예약완료" else STATUS_STYLE.get(r["status"], DEFAULT_STYLE)[0]
+        out += (
+            f'<div class="card" style="background:{col["card"]};border-left:4px solid {col["bar"]}">'
+            f'<div class="ch"><b style="color:{col["fg"]}">{r["facility"]}</b>'
+            f'<span class="bd" style="background:{badge}">{r["status"]}</span></div>'
+            f'<div class="cb" style="color:{col["fg"]}">{r["court"]} {time_text(r)}</div></div>'
+        )
+    return out
+
+
 tab_cal, tab_list = st.tabs(["📆 달력으로 보기", "📋 리스트형(예약건만)"])
 
 with tab_cal:
@@ -275,37 +335,47 @@ with tab_cal:
             if d == 0:
                 html += '<td class="empty"></td>'
                 continue
-            items = sorted(by_day.get(d, []), key=lambda r: r["hour"])
+            items = by_day.get(d, [])
             cls = "sun" if i == 0 else "sat" if i == 6 else ""
-            cnt = f" ({len(items)}건)" if items else ""
-            html += f'<td><div class="dn {cls}">{d}{cnt}</div>'
-            for r in items:
-                bg, fg = STATUS_STYLE.get(r["status"], DEFAULT_STYLE)
-                html += (
-                    f'<span class="pill">{r["facility"]}<b style="background:{bg};color:{fg}">'
-                    f'{r["status"]}</b><br>{r["court"]} {r["hour"]}시</span>'
-                )
-            html += "</td>"
+            cnt = f'<span class="cn">{len(items)}건</span>' if items else ""
+            html += f'<td><div class="dn {cls}">{d}{cnt}</div>{day_chips(items)}</td>'
         html += "</tr>"
     html += "</table>"
     st.markdown(html, unsafe_allow_html=True)
 
-    legend = " ".join(
-        f'<span style="background:{bg};color:{fg};border-radius:4px;padding:1px 6px;font-size:.75rem">{k}</span>'
-        for k, (bg, fg) in STATUS_STYLE.items()
+    legend = (
+        '<span class="lg" style="background:#dbeafe;border-left:3px solid #60a5fa;color:#1e3a8a">와부 (A·B·C)</span>'
+        '<span class="lg" style="background:#ffedd5;border-left:3px solid #f97316;color:#9a3412">월문 (시민)</span>'
+        '<span class="lg" style="border:1px solid #64748b">실선 예약완료</span>'
+        '<span class="lg" style="border:1px dashed #64748b">점선 신청·결제대기</span>'
+        '<span class="lg" style="border:1px dotted #64748b">점 환불</span>'
     )
-    st.markdown(f"<div style='margin-top:.6rem'>{legend}</div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div style='margin-top:.5rem'>{legend}</div>"
+        "<div style='font-size:.72rem;color:#64748b'>칸 표기: 시작시간 + 코트 (예: <b>19 ABC</b> = 19시 A·B·C코트, <b>21 월</b> = 월문 21시)</div>",
+        unsafe_allow_html=True,
+    )
+
+    days = sorted(by_day)
+    if days:
+        default = today.day if (year, month) == (today.year, today.month) and today.day in by_day else days[0]
+        sel = st.selectbox(
+            "📌 날짜별 상세 보기",
+            days,
+            index=days.index(default),
+            format_func=lambda d: f"{month}/{d} ({WD[date(year, month, d).weekday()]}) · {len(by_day[d])}건",
+        )
+        st.markdown(day_cards(by_day[sel]), unsafe_allow_html=True)
 
 with tab_list:
     if not visible:
         st.info("표시할 예약 내역이 없습니다.")
     else:
-        wd = "월화수목금토일"
         table = [
             {
-                "날짜": f'{r["date"][5:].replace("-", "/")} ({wd[date.fromisoformat(r["date"]).weekday()]})',
+                "날짜": f'{r["date"][5:].replace("-", "/")} ({WD[date.fromisoformat(r["date"]).weekday()]})',
                 "시설": f'{r["facility"]} {r["court"]}',
-                "시간": f'{r["hour"]}시',
+                "시간": time_text(r),
                 "상태": r["status"],
             }
             for r in sorted(visible, key=lambda r: (r["date"], r["hour"]))
