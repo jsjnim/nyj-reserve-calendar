@@ -6,13 +6,13 @@
 import calendar
 import json
 import random
+import re
 from datetime import date
 from pathlib import Path
 
 import streamlit as st
 
 DATA_FILE = Path("reservations.json")
-ACCOUNT_FILE = Path(".account.json")  # 로컬 실행 시 계정 기억용 (공개 배포 시 사용 금지)
 
 STATUS_STYLE = {
     "신청대기": ("#6b7280", "#fff"),
@@ -21,7 +21,8 @@ STATUS_STYLE = {
     "환불대기": ("#ef4444", "#fff"),
     "환불완료": ("#9ca3af", "#fff"),
 }
-HIDDEN_BY_DEFAULT = {"환불완료"}  # 환불은 캘린더에서 제외
+DEFAULT_STYLE = ("#6b7280", "#fff")
+HIDDEN_BY_DEFAULT = {"환불완료", "예약취소", "자동취소", "승인불가"}  # 캘린더에서 제외
 
 
 # ---------------------------------------------------------------- 데이터
@@ -36,7 +37,8 @@ def save_data(rows):
 
 
 def key_of(r):
-    return (r["date"], r["facility"], r["court"], r["hour"])
+    # 접수번호가 있으면 접수번호로 구분 (같은 시간대 재신청/취소 건이 섞이지 않게)
+    return r.get("id") or (r["date"], r["facility"], r["court"], r["hour"])
 
 
 def merge(old, new):
@@ -51,31 +53,107 @@ def merge(old, new):
     return sorted(old_map.values(), key=lambda r: (r["date"], r["hour"])), changed
 
 
-def fetch_mypage(user_id, password):
-    """남양주시 통합예약 마이페이지에서 신청현황/이력현황을 끝 페이지까지 순회해 가져온다.
+BASE = "https://www.nyj.go.kr/rent"
+LOGIN_URL = f"{BASE}/member/login"  # 로그인 화면 (폼 전송 주소: /member/process)
+# 신청현황 목록: /mypage/rlist/index/{접수상태(0=전체)}/{페이지당 개수}/{페이지}
+# 이력현황 목록(결제완료/환불 건): /mypage/rhistlist/index/0/{페이지당 개수}/{페이지}
+LIST_URLS = [
+    BASE + "/mypage/rlist/index/0/{rows}/{page}",
+    BASE + "/mypage/rhistlist/index/0/{rows}/{page}",
+]
+# 사이트 표기 → 이 앱의 표기 (표에 없는 상태는 그대로 표시)
+STATUS_MAP = {"결제완료": "예약완료", "환불": "환불완료"}
+# 센터명 → 시설 표기 (이력현황은 시설명 없이 센터명·코트명만 나옴)
+CENTER_MAP = {"와부조안행정복지센터": "와부"}
 
-    TODO: 실제 로그인 URL, 목록 URL, 파싱 규칙을 채워 넣어야 한다.
-    (브라우저 개발자도구 > Network 탭에서 로그인/목록 요청을 확인)
-    반환 형식: [{"date":"2026-10-01","facility":"와부","court":"A코트","hour":15,"status":"예약완료"}, ...]
-    """
-    raise NotImplementedError("fetch_mypage()에 마이페이지 크롤링 로직을 구현하세요.")
-    # --- 구현 예시 뼈대 -------------------------------------------------
-    # import requests
-    # from bs4 import BeautifulSoup
-    # s = requests.Session()
-    # s.post(LOGIN_URL, data={"id": user_id, "pw": password})
-    # rows = []
-    # for url in (APPLY_LIST_URL, HISTORY_LIST_URL):
-    #     page = 1
-    #     while True:
-    #         soup = BeautifulSoup(s.get(url, params={"page": page}).text, "html.parser")
-    #         items = soup.select("table tbody tr")
-    #         if not items:
-    #             break
-    #         for tr in items:
-    #             ...  # 날짜/시설/코트/시간/상태 파싱 후 rows.append({...})
-    #         page += 1
-    # return rows
+
+def parse_rlist(html):
+    """신청현황/이력현황 목록 HTML → (예약 목록, 전체 페이지 수)"""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(html, "html.parser")
+    rows = []
+    for tr in soup.select("table.rlist_table tbody tr"):
+        no = tr.select_one("td.rlist_no")
+        if not no:
+            continue
+        st = tr.select_one("td.rlist_status")
+        img = st.find("img")
+        status = (img.get("alt") if img and img.get("alt") else st.get_text(strip=True)).strip()
+        status = STATUS_MAP.get(status, status)
+        center = tr.select_one("td.rlist_facility").get_text(strip=True)
+        parts = list(tr.select_one("td.rlist_place").stripped_strings)
+        # 신청현황: ["와부 실내배드민턴장", "(배드민턴코트C)"] / 이력현황: ["배드민턴코트A"]
+        name = parts[0] if len(parts) > 1 else ""
+        raw = parts[1] if len(parts) > 1 else parts[0]
+        detail = raw.strip("() ")
+        if "일반" in raw:  # 월문은 "배드민턴코트 B (일반)" 한 코트뿐
+            facility, court = "월문", "시민코트"
+        else:
+            m = re.search(r"코트\s*([A-Za-z0-9])", detail)
+            court = f"{m.group(1).upper()}코트" if m else detail
+            if name:
+                facility = re.sub(r"(리|읍|면)$", "", name.split()[0])
+            else:
+                facility = CENTER_MAP.get(center, center[:2])
+        d = re.search(r"\d{4}-\d{2}-\d{2}", tr.select_one("td.rlist_usedate").get_text())
+        t = re.search(r"(\d{1,2}):\d{2}\s*~\s*(\d{1,2}):\d{2}", tr.select_one("td.rlist_usetime").get_text())
+        if not (d and t):
+            continue
+        rows.append({
+            "id": no.get_text(strip=True), "date": d.group(0), "facility": facility,
+            "court": court, "hour": int(t.group(1)), "end": int(t.group(2)), "status": status,
+        })
+    tot = soup.select_one(".total_area")
+    m = re.search(r"페이지\s*:\s*(\d+)\s*/\s*(\d+)", tot.get_text(" ")) if tot else None
+    return rows, (int(m.group(2)) if m else 1)
+
+
+def login(session, user_id, password):
+    """로그인 화면의 폼(memid/mempw + CSRFToken 등 hidden 값)을 그대로 채워 /member/process 로 전송한다."""
+    from urllib.parse import urlencode
+
+    from bs4 import BeautifulSoup
+
+    r = session.get(LOGIN_URL, timeout=15)
+    r.encoding = "euc-kr"
+    soup = BeautifulSoup(r.text, "html.parser")
+    form = soup.select_one("form#login_form")
+    if not form:
+        raise RuntimeError("로그인 페이지에서 로그인 폼을 찾지 못했습니다. LOGIN_URL을 확인하세요.")
+    data = {i.get("name"): i.get("value", "") for i in form.select("input[type=hidden]") if i.get("name")}
+    data["memid"] = user_id
+    data["mempw"] = password
+    action = form.get("action") or f"{BASE}/member/process"
+    body = urlencode(data, encoding="euc-kr")  # 사이트가 euc-kr 폼을 사용
+    session.post(
+        action,
+        data=body,
+        headers={"Content-Type": "application/x-www-form-urlencoded", "Referer": LOGIN_URL},
+        timeout=15,
+    )
+
+
+def fetch_mypage(user_id, password):
+    """마이페이지의 신청현황(및 이력현황)을 마지막 페이지까지 순회해서 가져온다."""
+    import requests
+
+    s = requests.Session()
+    s.headers["User-Agent"] = "Mozilla/5.0"
+    login(s, user_id, password)
+
+    out = []
+    for tpl in LIST_URLS:
+        page, total = 1, 1
+        while page <= total:
+            r = s.get(tpl.format(rows=100, page=page), timeout=15)
+            r.encoding = "euc-kr"
+            if "rlist_table" not in r.text:
+                raise RuntimeError("로그인에 실패했거나 목록 화면 구조가 다릅니다. (아이디/비밀번호, 캡차 여부 확인)")
+            rows, total = parse_rlist(r.text)
+            out += rows
+            page += 1
+    return out
 
 
 def make_sample(year, month):
@@ -128,19 +206,18 @@ st.caption("💡 신청현황 및 이력현황 마지막 페이지까지 직접 
 if "rows" not in st.session_state:
     st.session_state.rows = load_data()
 if "acct" not in st.session_state:
-    st.session_state.acct = (
-        json.loads(ACCOUNT_FILE.read_text()) if ACCOUNT_FILE.exists() else {"id": "", "pw": ""}
-    )
+    # 보안: 계정은 이 접속(세션) 메모리에만 두고 서버 파일에는 저장하지 않는다.
+    st.session_state.acct = {"id": "", "pw": ""}
 
 with st.expander("🔑 마이페이지 조회용 계정 설정 (개인 브라우저 자동 기억)", expanded=True):
     uid = st.text_input("조회용 아이디", value=st.session_state.acct["id"])
     upw = st.text_input("조회용 비밀번호", value=st.session_state.acct["pw"], type="password")
     if st.button("계정 기억/저장", use_container_width=True):
         st.session_state.acct = {"id": uid, "pw": upw}
-        ACCOUNT_FILE.write_text(json.dumps(st.session_state.acct))
-        st.success("저장했습니다.")
+        st.success("이번 접속 동안 기억합니다. (새로고침하면 다시 입력)")
 
 if st.button("🔄 마이페이지 실시간 동기화", use_container_width=True):
+    st.session_state.acct = {"id": uid, "pw": upw}
     try:
         with st.spinner("마이페이지를 순회하는 중..."):
             new_rows = fetch_mypage(st.session_state.acct["id"], st.session_state.acct["pw"])
@@ -203,7 +280,7 @@ with tab_cal:
             cnt = f" ({len(items)}건)" if items else ""
             html += f'<td><div class="dn {cls}">{d}{cnt}</div>'
             for r in items:
-                bg, fg = STATUS_STYLE[r["status"]]
+                bg, fg = STATUS_STYLE.get(r["status"], DEFAULT_STYLE)
                 html += (
                     f'<span class="pill">{r["facility"]}<b style="background:{bg};color:{fg}">'
                     f'{r["status"]}</b><br>{r["court"]} {r["hour"]}시</span>'
