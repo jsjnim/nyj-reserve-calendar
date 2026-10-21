@@ -180,7 +180,7 @@ st.set_page_config(page_title="남양주시 시설 예약 현황 캘린더", pag
 st.markdown(
     """
 <style>
-.block-container{padding-top:2rem;max-width:760px}
+.block-container{padding-top:2rem;max-width:920px!important}
 h1.t{color:#1d4ed8;font-size:1.9rem;margin:0 0 .3rem}
 p.sub{color:#64748b;margin:0 0 1.2rem}
 h3.sec{border-left:5px solid #3b82f6;padding-left:.7rem;color:#64748b;margin:1rem 0 .5rem}
@@ -195,6 +195,14 @@ table.cal td.empty{background:#f1f5f9}
 .cn{font-size:.55rem;font-weight:500;color:#64748b;margin-left:2px}
 .chip{display:block;font-size:.58rem;line-height:1.25;margin-top:2px;padding:1px 2px;
   border-radius:3px;white-space:nowrap;overflow:hidden;font-weight:700}
+.chip .w{display:none}
+.chip .st{display:block;font-weight:500;font-size:.85em}
+@media (min-width:641px){
+  .chip{font-size:.66rem;padding:2px 4px;margin-top:3px}
+  .chip .n{display:none}
+  .chip .w{display:block}
+  table.cal td{height:70px;padding:3px}
+}
 .lg{display:inline-block;font-size:.72rem;padding:1px 6px;border-radius:4px;margin:2px 4px 2px 0}
 .card{border-radius:8px;padding:.5rem .7rem;margin:.35rem 0}
 .ch{display:flex;justify-content:space-between;align-items:center;font-size:1rem}
@@ -247,7 +255,7 @@ month = c2.selectbox("월 선택", list(range(1, 13)), index=today.month - 1)
 
 with st.sidebar:
     st.header("옵션")
-    show_refund = st.checkbox("환불완료 건도 표시", value=False)
+    show_refund = st.checkbox("환불완료·취소 건도 표시", value=False)
     if st.button("샘플 데이터 채우기"):
         merged, _ = merge(st.session_state.rows, make_sample(year, month))
         st.session_state.rows = merged
@@ -272,8 +280,28 @@ FAC = {  # 시설별 색: 와부=연한 파랑, 월문=주황
     "월문": {"bg": "#ffedd5", "bar": "#f97316", "fg": "#9a3412", "card": "#fff7ed"},
 }
 FAC_DEFAULT = {"bg": "#e5e7eb", "bar": "#9ca3af", "fg": "#374151", "card": "#f3f4f6"}
-BORDER = {"예약완료": "solid", "신청대기": "dashed", "결제대기": "dashed", "환불대기": "dotted", "환불완료": "dotted"}
+GRAY = {"bg": "#e5e7eb", "fg": "#374151", "bar": "#9ca3af", "card": "#f3f4f6", "badge": "#6b7280", "badge_fg": "#fff"}
+REFUND = {"환불대기", "환불완료"}
+CANCELED = {"예약취소", "자동취소", "승인불가"}
 WD = "월화수목금토일"
+
+
+def look(r):
+    """상태별 색: 예약완료=시설색 / 결제대기=빨강 / 신청대기=회색 / 환불=시설색 반전"""
+    col = FAC.get(r["facility"], FAC_DEFAULT)
+    s = r["status"]
+    if s == "신청대기":
+        return {**GRAY, "line": False, "dash": True}
+    if s in REFUND:  # 배경과 글자색을 맞바꿔 반전
+        return {"bg": col["fg"], "fg": col["bg"], "bar": col["fg"], "card": col["fg"],
+                "badge": col["bg"], "badge_fg": col["fg"], "line": s == "환불완료", "dash": False}
+    if s in CANCELED:
+        return {**GRAY, "line": True, "dash": False}
+    if s == "결제대기":  # 시설과 상관없이 빨간색
+        return {"bg": "#fee2e2", "fg": "#991b1b", "bar": "#ef4444", "card": "#fef2f2",
+                "badge": "#ef4444", "badge_fg": "#fff", "line": False, "dash": False}
+    return {"bg": col["bg"], "fg": col["fg"], "bar": col["bar"], "card": col["card"],
+            "badge": col["bar"], "badge_fg": "#fff", "line": False, "dash": False}
 
 
 def time_text(r):
@@ -286,33 +314,40 @@ def court_letter(r):
 
 
 def day_chips(items):
-    """같은 시설·시간·상태의 예약을 한 칸으로 묶는다. 예) '19 ABC' = 19시 A·B·C코트"""
+    """같은 시설·시간·상태의 예약을 한 칸으로 묶는다.
+    좁은 화면: '19 ABC' / 넓은 화면: '와부 ABC코트 · 19:00~21:00' (+ 예약완료가 아니면 상태 표시)"""
     groups = {}
     for r in sorted(items, key=lambda r: (r["hour"], r["facility"], r["court"])):
-        groups.setdefault((r["hour"], r["facility"], r["status"]), []).append(r)
+        groups.setdefault((time_text(r), r["facility"], r["status"]), []).append(r)
     out = ""
-    for (hour, facility, status), rs in groups.items():
-        col = FAC.get(facility, FAC_DEFAULT)
-        label = "월" if facility == "월문" else "".join(court_letter(r) for r in rs)
+    for (tm, facility, status), rs in groups.items():
+        lk = look(rs[0])
+        letters = "".join(court_letter(r) for r in rs)
+        short = f'{rs[0]["hour"]} ' + ("월" if facility == "월문" else letters)
+        court_txt = "B(시민)" if facility == "월문" else f"{letters}코트"
+        third = f'<span class="st">{status}</span>' if status != "예약완료" else ""
         style = (
-            f'background:{col["bg"]};color:{col["fg"]};border:1px {BORDER.get(status, "solid")} {col["bar"]};'
-            f'border-left:3px solid {col["bar"]};'
-            + ("text-decoration:line-through;" if status == "환불완료" else "")
+            f'background:{lk["bg"]};color:{lk["fg"]};'
+            f'border:1px {"dashed" if lk["dash"] else "solid"} {lk["bar"]};border-left:3px solid {lk["bar"]};'
+            + ("text-decoration:line-through;" if lk["line"] else "")
         )
-        out += f'<span class="chip" style="{style}">{hour} {label}</span>'
+        out += (
+            f'<span class="chip" style="{style}"><span class="n">{short}</span>'
+            f'<span class="w">{facility} {court_txt}<br>{tm}{third}</span></span>'
+        )
     return out
 
 
 def day_cards(items):
     out = ""
     for r in sorted(items, key=lambda r: (r["hour"], r["court"])):
-        col = FAC.get(r["facility"], FAC_DEFAULT)
-        badge = col["bar"] if r["status"] == "예약완료" else STATUS_STYLE.get(r["status"], DEFAULT_STYLE)[0]
+        lk = look(r)
+        line = "text-decoration:line-through;" if lk["line"] else ""
         out += (
-            f'<div class="card" style="background:{col["card"]};border-left:4px solid {col["bar"]}">'
-            f'<div class="ch"><b style="color:{col["fg"]}">{r["facility"]}</b>'
-            f'<span class="bd" style="background:{badge}">{r["status"]}</span></div>'
-            f'<div class="cb" style="color:{col["fg"]}">{r["court"]} {time_text(r)}</div></div>'
+            f'<div class="card" style="background:{lk["card"]};border-left:4px solid {lk["bar"]}">'
+            f'<div class="ch"><b style="color:{lk["fg"]}">{r["facility"]}</b>'
+            f'<span class="bd" style="background:{lk["badge"]};color:{lk["badge_fg"]}">{r["status"]}</span></div>'
+            f'<div class="cb" style="color:{lk["fg"]};{line}">{r["court"]} {time_text(r)}</div></div>'
         )
     return out
 
@@ -344,15 +379,16 @@ with tab_cal:
     st.markdown(html, unsafe_allow_html=True)
 
     legend = (
-        '<span class="lg" style="background:#dbeafe;border-left:3px solid #60a5fa;color:#1e3a8a">와부 (A·B·C)</span>'
-        '<span class="lg" style="background:#ffedd5;border-left:3px solid #f97316;color:#9a3412">월문 (시민)</span>'
-        '<span class="lg" style="border:1px solid #64748b">실선 예약완료</span>'
-        '<span class="lg" style="border:1px dashed #64748b">점선 신청·결제대기</span>'
-        '<span class="lg" style="border:1px dotted #64748b">점 환불</span>'
+        '<span class="lg" style="background:#dbeafe;border-left:3px solid #60a5fa;color:#1e3a8a">와부</span>'
+        '<span class="lg" style="background:#ffedd5;border-left:3px solid #f97316;color:#9a3412">월문</span>'
+        '<span class="lg" style="background:#fee2e2;border-left:3px solid #ef4444;color:#991b1b">빨강 결제대기</span>'
+        '<span class="lg" style="background:#e5e7eb;color:#374151;border:1px dashed #9ca3af">회색 신청대기</span>'
+        '<span class="lg" style="background:#1e3a8a;color:#dbeafe">환불(와부)</span>'
+        '<span class="lg" style="background:#9a3412;color:#ffedd5">환불(월문)</span>'
     )
     st.markdown(
         f"<div style='margin-top:.5rem'>{legend}</div>"
-        "<div style='font-size:.72rem;color:#64748b'>칸 표기: 시작시간 + 코트 (예: <b>19 ABC</b> = 19시 A·B·C코트, <b>21 월</b> = 월문 21시)</div>",
+        "<div style='font-size:.72rem;color:#64748b'>좁은 화면 표기: 시작시간 + 코트 (예: <b>19 ABC</b> = 19시 A·B·C코트, <b>21 월</b> = 월문 21시)</div>",
         unsafe_allow_html=True,
     )
 
