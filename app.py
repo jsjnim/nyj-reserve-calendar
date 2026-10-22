@@ -184,7 +184,7 @@ st.markdown(
 h1.t{color:#1d4ed8;font-size:1.9rem;margin:0 0 .3rem}
 p.sub{color:#64748b;margin:0 0 1.2rem}
 h3.sec{border-left:5px solid #3b82f6;padding-left:.7rem;color:#64748b;margin:1rem 0 .5rem}
-table.cal{width:100%;border-collapse:separate;border-spacing:2px;table-layout:fixed;
+table.cal{color:#1e293b;width:100%;border-collapse:separate;border-spacing:2px;table-layout:fixed;
   background:#f8fafc;border:1px solid #dbe4f0;border-radius:10px;padding:2px}
 table.cal th{background:#eef2f8;border:1px solid #dbe4f0;border-radius:4px;padding:5px 0;font-size:.78rem}
 table.cal td{vertical-align:top;background:#fff;border:1px solid #dbe4f0;border-radius:4px;
@@ -197,12 +197,26 @@ table.cal td.empty{background:#f1f5f9}
   border-radius:3px;white-space:nowrap;overflow:hidden;font-weight:700}
 .chip .w{display:none}
 .chip .st{display:block;font-weight:500;font-size:.85em}
-@media (min-width:641px){
-  .chip{font-size:.66rem;padding:2px 4px;margin-top:3px}
-  .chip .n{display:none}
-  .chip .w{display:block}
-  table.cal td{height:70px;padding:3px}
-}
+.calwrap{overflow:hidden}
+table.cal.full .chip{font-size:.66rem;padding:2px 4px;margin-top:3px}
+table.cal.full .chip .n{display:none}
+table.cal.full .chip .w{display:block}
+table.cal.full td{height:70px;padding:3px}
+@media (max-width:640px){table.cal.full{width:560px}table.cal.full .chip{font-size:.58rem;padding:1px 3px}table.cal.full td{height:64px}}
+@media (max-width:600px){table.cal.full{zoom:1.000}}
+@media (max-width:580px){table.cal.full{zoom:0.971}}
+@media (max-width:560px){table.cal.full{zoom:0.936}}
+@media (max-width:540px){table.cal.full{zoom:0.900}}
+@media (max-width:520px){table.cal.full{zoom:0.864}}
+@media (max-width:500px){table.cal.full{zoom:0.829}}
+@media (max-width:480px){table.cal.full{zoom:0.793}}
+@media (max-width:460px){table.cal.full{zoom:0.757}}
+@media (max-width:440px){table.cal.full{zoom:0.721}}
+@media (max-width:420px){table.cal.full{zoom:0.686}}
+@media (max-width:400px){table.cal.full{zoom:0.650}}
+@media (max-width:380px){table.cal.full{zoom:0.614}}
+@media (max-width:360px){table.cal.full{zoom:0.579}}
+@media (max-width:340px){table.cal.full{zoom:0.543}}
 .lg{display:inline-block;font-size:.72rem;padding:1px 6px;border-radius:4px;margin:2px 4px 2px 0}
 .card{border-radius:8px;padding:.5rem .7rem;margin:.35rem 0}
 .ch{display:flex;justify-content:space-between;align-items:center;font-size:1rem}
@@ -359,7 +373,7 @@ with tab_cal:
     for r in visible:
         by_day.setdefault(int(r["date"][-2:]), []).append(r)
 
-    html = '<table class="cal"><tr>'
+    html = '<div class="calwrap"><table class="cal full"><tr>'
     for i, n in enumerate(["일", "월", "화", "수", "목", "금", "토"]):
         cls = "sun" if i == 0 else "sat" if i == 6 else ""
         html += f'<th class="{cls}">{n}</th>'
@@ -375,7 +389,7 @@ with tab_cal:
             cnt = f'<span class="cn">{len(items)}건</span>' if items else ""
             html += f'<td><div class="dn {cls}">{d}{cnt}</div>{day_chips(items)}</td>'
         html += "</tr>"
-    html += "</table>"
+    html += "</table></div>"
     st.markdown(html, unsafe_allow_html=True)
 
     legend = (
